@@ -11,4 +11,4 @@ TARIFF_FILE = (
 
 
 def load_tariffs():
-    return pd.read_csv(TARIFF_FILE)
+    return pd.read_csv(TARIFF_FILE)  
