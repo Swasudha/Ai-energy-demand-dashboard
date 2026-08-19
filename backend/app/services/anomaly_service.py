@@ -1,40 +1,218 @@
 import pandas as pd
 
 
-def detect_demand_anomalies(df):
-    results = []
+def get_anomalies(df: pd.DataFrame):
+    """
+    Detect electricity demand anomalies separately for each state.
 
-    for state, state_df in df.groupby("State"):
-        state_df = state_df.copy()
+    Z-score:
+        Z = (demand - state_mean) / state_std
 
-        state_mean = state_df["Max_Demand_Met_MW"].mean()
-        state_std = state_df["Max_Demand_Met_MW"].std()
+    Classification:
+        Z >= 2   -> High
+        Z <= -2  -> Low
+        otherwise -> Normal
 
-        # Avoid division by zero for states with no demand variation
-        if state_std == 0 or pd.isna(state_std):
-            state_df["zScore"] = 0
-        else:
-            state_df["zScore"] = (
-                state_df["Max_Demand_Met_MW"] - state_mean
-            ) / state_std
+    Returns:
+        date
+        state
+        demand
+        expectedDemand
+        deviation
+        zScore
+        status
+    """
 
-        def classify(z_score):
-            if z_score >= 2:
-                return "High"
-            elif z_score <= -2:
-                return "Low"
-            return "Normal"
+    required_columns = [
+        "Date",
+        "State",
+        "Max_Demand_Met_MW",
+    ]
 
-        state_df["status"] = state_df["zScore"].apply(classify)
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
 
-        for _, row in state_df.iterrows():
-            results.append(
-                {
-                    "date": str(row["Date"]),
-                    "demand": row["Max_Demand_Met_MW"],
-                    "zScore": round(row["zScore"], 2),
-                    "status": row["status"],
-                }
-            )
+    if missing_columns:
+        raise ValueError(
+            f"Missing columns: {missing_columns}"
+        )
 
-    return results
+    # Work on a copy so the original dataset is not modified
+    data = df[
+        required_columns
+    ].copy()
+
+    # Make sure demand is numeric
+    data["Max_Demand_Met_MW"] = pd.to_numeric(
+        data["Max_Demand_Met_MW"],
+        errors="coerce",
+    )
+
+    # Remove invalid demand values
+    data = data.dropna(
+        subset=[
+            "Date",
+            "State",
+            "Max_Demand_Met_MW",
+        ]
+    )
+
+    # Make sure dates are sorted
+    data["Date"] = pd.to_datetime(
+        data["Date"],
+        errors="coerce",
+    )
+
+    data = data.dropna(
+        subset=["Date"]
+    )
+
+    data = data.sort_values(
+        ["State", "Date"]
+    )
+
+    # --------------------------------------------------
+    # Calculate state-level statistics
+    # --------------------------------------------------
+
+    state_stats = (
+        data.groupby("State")[
+            "Max_Demand_Met_MW"
+        ]
+        .agg(
+            state_mean="mean",
+            state_std="std",
+        )
+        .reset_index()
+    )
+
+    # --------------------------------------------------
+    # Join statistics back to each record
+    # --------------------------------------------------
+
+    data = data.merge(
+        state_stats,
+        on="State",
+        how="left",
+    )
+
+    # --------------------------------------------------
+    # Expected demand
+    #
+    # For anomaly detection, expected demand is the
+    # average demand of the selected state.
+    # --------------------------------------------------
+
+    data["expectedDemand"] = data[
+        "state_mean"
+    ]
+
+    # --------------------------------------------------
+    # Deviation
+    #
+    # Actual demand - expected demand
+    # --------------------------------------------------
+
+    data["deviation"] = (
+        data["Max_Demand_Met_MW"]
+        - data["expectedDemand"]
+    )
+
+    # --------------------------------------------------
+    # Z-score
+    # --------------------------------------------------
+
+    data["zScore"] = (
+        data["deviation"]
+        / data["state_std"]
+    )
+
+    # Avoid infinite values if standard deviation is 0
+    data["zScore"] = data[
+        "zScore"
+    ].replace(
+        [float("inf"), float("-inf")],
+        0,
+    )
+
+    data["zScore"] = data[
+        "zScore"
+    ].fillna(0)
+
+    # --------------------------------------------------
+    # Status classification
+    # --------------------------------------------------
+
+    def classify_status(z):
+        if z >= 2:
+            return "High"
+
+        if z <= -2:
+            return "Low"
+
+        return "Normal"
+
+    data["status"] = data[
+        "zScore"
+    ].apply(classify_status)
+
+    # --------------------------------------------------
+    # Convert to API response
+    # --------------------------------------------------
+
+    result = []
+
+    for _, row in data.iterrows():
+
+        result.append(
+            {
+                "date": row["Date"].strftime(
+                    "%Y-%m-%d"
+                ),
+
+                "state": row["State"],
+
+                "demand": round(
+                    float(
+                        row[
+                            "Max_Demand_Met_MW"
+                        ]
+                    ),
+                    2,
+                ),
+
+                "expectedDemand": round(
+                    float(
+                        row[
+                            "expectedDemand"
+                        ]
+                    ),
+                    2,
+                ),
+
+                "deviation": round(
+                    float(
+                        row[
+                            "deviation"
+                        ]
+                    ),
+                    2,
+                ),
+
+                "zScore": round(
+                    float(
+                        row[
+                            "zScore"
+                        ]
+                    ),
+                    2,
+                ),
+
+                "status": row["status"],
+            }
+        )
+
+    return result

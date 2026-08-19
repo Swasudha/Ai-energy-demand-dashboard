@@ -1,47 +1,101 @@
 import pandas as pd
 
 
-def get_weather_correlations(df, state):
+def get_weather_correlations(df: pd.DataFrame, state: str):
+    """
+    Calculate weather correlations and return
+    real dataset observations for the selected state.
+    """
+
     state_df = df[df["State"] == state].copy()
 
     if state_df.empty:
-        raise ValueError(f"No data found for state: {state}")
+        raise ValueError(
+            f"No weather data available for state: {state}"
+        )
 
-    demand_column = "Max_Demand_Met_MW"
+    required_columns = [
+        "Max_Demand_Met_MW",
+        "Temp_Avg",
+        "Humidity",
+        "Rainfall",
+    ]
 
-    correlations = {
-        "temperature_correlation": state_df["Temp_Avg"].corr(
-            state_df[demand_column]
-        ),
-        "humidity_correlation": state_df["Humidity"].corr(
-            state_df[demand_column]
-        ),
-        "rainfall_correlation": state_df["Rainfall"].corr(
-            state_df[demand_column]
-        ),
-    }
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in state_df.columns
+    ]
 
-    chart_data = state_df[
+    if missing_columns:
+        raise ValueError(
+            f"Missing columns: {missing_columns}"
+        )
+
+    # ---------------------------------------
+    # Correlation calculation
+    # ---------------------------------------
+
+    correlation = state_df[
+        required_columns
+    ].corr()["Max_Demand_Met_MW"]
+
+    # ---------------------------------------
+    # Real dataset observations
+    # ---------------------------------------
+
+    observations_df = state_df[
         [
             "Date",
             "Temp_Avg",
             "Humidity",
             "Rainfall",
-            demand_column,
+            "Max_Demand_Met_MW",
         ]
-    ].rename(
-        columns={
-            "Temp_Avg": "temperature",
-            "Humidity": "humidity",
-            "Rainfall": "rainfall",
-            demand_column: "demand",
-        }
-    )
+    ].copy()
 
-    chart_data["Date"] = chart_data["Date"].astype(str)
+    # Remove rows containing missing values
+    observations_df = observations_df.dropna()
+
+    observations = []
+
+    for _, row in observations_df.iterrows():
+
+        observations.append(
+            {
+                "date": str(row["Date"]),
+                "temperature": round(
+                    float(row["Temp_Avg"]), 2
+                ),
+                "humidity": round(
+                    float(row["Humidity"]), 2
+                ),
+                "rainfall": round(
+                    float(row["Rainfall"]), 2
+                ),
+                "demand": round(
+                    float(row["Max_Demand_Met_MW"]), 2
+                ),
+            }
+        )
 
     return {
         "state": state,
-        "correlations": correlations,
-        "chart_data": chart_data.to_dict(orient="records"),
+
+        "temperature_correlation": round(
+            float(correlation["Temp_Avg"]),
+            3,
+        ),
+
+        "humidity_correlation": round(
+            float(correlation["Humidity"]),
+            3,
+        ),
+
+        "rainfall_correlation": round(
+            float(correlation["Rainfall"]),
+            3,
+        ),
+
+        "observations": observations,
     }

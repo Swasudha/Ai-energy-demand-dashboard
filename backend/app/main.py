@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from app.services.insight_service import get_insights
 
 from app.data.loader import load_dataset
 from app.ml.predict import predict_demand
 
-from app.services.anomaly_service import detect_demand_anomalies
+from app.services.anomaly_service import get_anomalies
 from app.services.cost_service import calculate_state_cost
 from app.services.historical_service import (
     get_daily_demand,
@@ -23,6 +26,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class PredictionRequest(BaseModel):
     state: str
@@ -38,12 +51,10 @@ class PredictionRequest(BaseModel):
 
 class ScenarioRequest(BaseModel):
     state: str
-    date: str
     current_temperature: float
     scenario_temperature: float
     humidity: float
     rainfall: float
-
 
 class SavingsRequest(BaseModel):
     state: str
@@ -82,8 +93,25 @@ def states():
 
 
 @app.get("/api/historical")
-def historical():
+def historical(state: str | None = None):
     df = load_dataset()
+
+    # Filter by state when a state is provided
+    if state:
+        available_states = (
+            df["State"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        if state not in available_states:
+            raise HTTPException(
+                status_code=404,
+                detail=f"State '{state}' not found",
+            )
+
+        df = df[df["State"] == state].copy()
 
     daily = get_daily_demand(df)
     monthly = get_monthly_demand(df)
@@ -91,6 +119,7 @@ def historical():
     highest_lowest = get_highest_lowest_demand(df)
 
     return {
+        "state": state,
         "daily": daily.to_dict(orient="records"),
         "monthly": monthly.to_dict(orient="records"),
         "seasonal": seasonal.to_dict(orient="records"),
@@ -127,8 +156,7 @@ def weather_impact(state: str):
 def anomalies():
     df = load_dataset()
 
-    return detect_demand_anomalies(df)
-
+    return get_anomalies(df)
 
 @app.get("/api/tariff/{state}")
 def tariff(state: str):
@@ -161,7 +189,6 @@ def scenario(request: ScenarioRequest):
     try:
         return run_weather_scenario(
             state=request.state,
-            date=request.date,
             current_temperature=request.current_temperature,
             scenario_temperature=request.scenario_temperature,
             humidity=request.humidity,
@@ -198,3 +225,23 @@ def savings(request: SavingsRequest):
             status_code=400,
             detail=str(error),
         )
+
+@app.get("/api/insights")
+def insights(
+    state: str,
+    reduction_percentage: float = 5,
+):
+    df = load_dataset()
+
+    try:
+        return get_insights(
+            df=df,
+            state=state,
+            reduction_percentage=reduction_percentage,
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail=str(error),
+        )    
