@@ -5,6 +5,10 @@ import pandas as pd
 from app.ml.predict import predict_demand
 
 
+# --------------------------------------------------
+# PATH
+# --------------------------------------------------
+
 BASE_DIR = os.path.dirname(
     os.path.dirname(
         os.path.dirname(
@@ -22,7 +26,12 @@ DATA_PATH = os.path.join(
 )
 
 
+# --------------------------------------------------
+# LOAD DATA
+# --------------------------------------------------
+
 def load_data():
+
     df = pd.read_csv(DATA_PATH)
 
     df["Date"] = pd.to_datetime(
@@ -42,32 +51,76 @@ def load_data():
         ["State", "Date"]
     ).reset_index(drop=True)
 
-    # Calculate previous-day demand
+    # --------------------------------------------------
+    # Calendar features
+    # --------------------------------------------------
+
+    df["Year"] = df["Date"].dt.year
+
+    df["Month"] = df["Date"].dt.month
+
+    df["Weekday"] = df["Date"].dt.day_name()
+
+    # --------------------------------------------------
+    # Season
+    # --------------------------------------------------
+
+    def get_season(month):
+
+        if month in [3, 4, 5, 6]:
+            return "Summer"
+
+        if month in [7, 8, 9, 10]:
+            return "Monsoon"
+
+        return "Winter"
+
+    df["Season"] = df["Month"].apply(
+        get_season
+    )
+
+    # --------------------------------------------------
+    # Previous-day demand
+    # --------------------------------------------------
+
     df["Lag_1_Demand"] = (
-        df.groupby("State")["Max_Demand_Met_MW"]
+        df.groupby("State")[
+            "Max_Demand_Met_MW"
+        ]
         .shift(1)
     )
 
-    # Calculate demand from 7 days earlier
+    # --------------------------------------------------
+    # Demand from 7 days earlier
+    # --------------------------------------------------
+
     df["Lag_7_Demand"] = (
-        df.groupby("State")["Max_Demand_Met_MW"]
+        df.groupby("State")[
+            "Max_Demand_Met_MW"
+        ]
         .shift(7)
     )
 
     return df
 
 
+# --------------------------------------------------
+# WEATHER SCENARIO
+# --------------------------------------------------
+
 def run_weather_scenario(
     state,
+    year,
     current_temperature,
     scenario_temperature,
     humidity,
     rainfall,
 ):
+
     df = load_data()
 
     # --------------------------------------------------
-    # Find the selected state
+    # Find selected state
     # --------------------------------------------------
 
     state_df = df[
@@ -75,85 +128,178 @@ def run_weather_scenario(
     ].copy()
 
     if state_df.empty:
+
         raise ValueError(
             f"No data found for state: {state}"
         )
 
     # --------------------------------------------------
-    # Use the latest available date in the dataset
+    # Sort by date
     # --------------------------------------------------
 
     state_df = state_df.sort_values(
         "Date"
     )
 
+    # Latest available record
     row = state_df.iloc[-1]
 
-    latest_date = row["Date"]
-
     # --------------------------------------------------
-    # Make sure lag demand values are available
+    # Validate lag values
     # --------------------------------------------------
 
-    if pd.isna(row["Lag_1_Demand"]) or pd.isna(
-        row["Lag_7_Demand"]
+    if (
+        pd.isna(row["Lag_1_Demand"])
+        or pd.isna(row["Lag_7_Demand"])
     ):
+
         raise ValueError(
             "Lag demand values are not available "
             "for the latest date."
         )
 
     # --------------------------------------------------
+    # Get calendar information
+    #
+    # For the selected year, we keep the latest
+    # available month/day pattern as the scenario
+    # reference.
+    # --------------------------------------------------
+
+    month = int(row["Month"])
+
+    weekday = row["Weekday"]
+
+    season = row["Season"]
+
+    # --------------------------------------------------
     # Common prediction features
+    #
+    # IMPORTANT:
+    # Do NOT put year here because year is passed
+    # explicitly to predict_demand().
     # --------------------------------------------------
 
     common_features = {
+
         "state": state,
-        "humidity": humidity,
-        "rainfall": rainfall,
-        "month": int(row["Month"]),
-        "weekday": row["Weekday"],
-        "season": row["Season"],
+
+        "humidity": float(
+            humidity
+        ),
+
+        "rainfall": float(
+            rainfall
+        ),
+
+        "month": month,
+
+        "weekday": weekday,
+
+        "season": season,
+
         "lag_1_demand": float(
             row["Lag_1_Demand"]
         ),
+
         "lag_7_demand": float(
             row["Lag_7_Demand"]
         ),
     }
 
     # --------------------------------------------------
-    # Baseline prediction
+    # BASELINE PREDICTION
     # --------------------------------------------------
 
     baseline_result = predict_demand(
-        temp_avg=current_temperature,
-        **common_features,
+
+        state=state,
+
+        year=year,
+
+        temp_avg=float(
+            current_temperature
+        ),
+
+        humidity=float(
+            humidity
+        ),
+
+        rainfall=float(
+            rainfall
+        ),
+
+        month=month,
+
+        weekday=weekday,
+
+        season=season,
+
+        lag_1_demand=float(
+            row["Lag_1_Demand"]
+        ),
+
+        lag_7_demand=float(
+            row["Lag_7_Demand"]
+        ),
     )
 
     # --------------------------------------------------
-    # Scenario prediction
+    # SCENARIO PREDICTION
     # --------------------------------------------------
 
     scenario_result = predict_demand(
-        temp_avg=scenario_temperature,
-        **common_features,
+
+        state=state,
+
+        year=year,
+
+        temp_avg=float(
+            scenario_temperature
+        ),
+
+        humidity=float(
+            humidity
+        ),
+
+        rainfall=float(
+            rainfall
+        ),
+
+        month=month,
+
+        weekday=weekday,
+
+        season=season,
+
+        lag_1_demand=float(
+            row["Lag_1_Demand"]
+        ),
+
+        lag_7_demand=float(
+            row["Lag_7_Demand"]
+        ),
     )
 
-    baseline_demand = baseline_result[
-        "predicted_demand"
-    ]
+    # --------------------------------------------------
+    # Convert prediction results to float
+    # --------------------------------------------------
 
-    scenario_demand = scenario_result[
-        "predicted_demand"
-    ]
+    baseline_demand = float(
+        baseline_result
+    )
+
+    scenario_demand = float(
+        scenario_result
+    )
 
     # --------------------------------------------------
     # Calculate difference
     # --------------------------------------------------
 
     difference = (
-        scenario_demand - baseline_demand
+        scenario_demand
+        - baseline_demand
     )
 
     # --------------------------------------------------
@@ -161,29 +307,41 @@ def run_weather_scenario(
     # --------------------------------------------------
 
     if baseline_demand != 0:
+
         percentage_change = (
-            difference / baseline_demand
+            difference
+            / baseline_demand
         ) * 100
+
     else:
+
         percentage_change = 0
 
     # --------------------------------------------------
-    # Return API response
+    # Return response
     # --------------------------------------------------
 
     return {
+
+        "state": state,
+
+        "year": year,
+
         "baselineDemand": round(
             baseline_demand,
             2,
         ),
+
         "scenarioDemand": round(
             scenario_demand,
             2,
         ),
+
         "difference": round(
             difference,
             2,
         ),
+
         "percentageChange": round(
             percentage_change,
             2,
