@@ -16,6 +16,6 @@ python-multipart==0.0.20
 scikit-learn==1.7.1
 six==1.17.0
 starlette==0.47.2
-typing-inspection==0.4.1
+typing-inspection==0.4.2
 typing-extensions==4.15.0
 uvicorn==0.52.0
