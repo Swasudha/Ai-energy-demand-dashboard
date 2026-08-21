@@ -39,6 +39,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "https://ai-energy-demand-dashboard.vercel.app",
+        "https://ai-energy-demand-dashboard-6mq4jyf9d-s-swathi.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
